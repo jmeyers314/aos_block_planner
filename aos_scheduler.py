@@ -12,7 +12,17 @@ from astropy.coordinates import AltAz, Angle, SkyCoord, get_body
 from astropy.table import QTable, vstack
 from astropy.time import Time
 
-RUBIN = Observer.at_site('cerro pachon')
+
+# RUBIN = Observer.at_site('cerro pachon')
+# Use OpSim values
+RUBIN = Observer(
+    longitude=-70.7494*u.deg, latitude=-30.2444*u.deg,
+    elevation=2650.0*u.m, name="LSST",
+    timezone="Chile/Continental",
+    pressure=750.0*u.mBa,
+    temperature=11.5*u.deg_C,
+    relative_humidity=0.4
+)
 
 
 def almanac(day, verbose=False):
@@ -77,9 +87,13 @@ def position_angle(coord, obstime, location=RUBIN.location):
     Parameters
     ----------
     coord : SkyCoord
-        Boresight coordinate
+        Boresight coordinate.  Any adjustments due to pressure, temperature,
+        releative humidity, or wavelength should be applied to the coord
+        object.
     obstime : Time
         Time of observation
+    location : EarthLocation
+        Location of telescope
 
     Returns
     -------
@@ -93,12 +107,17 @@ def position_angle(coord, obstime, location=RUBIN.location):
         pass
 
     # Get point a little closer to zenith
+    # This will fail if coord is too close to zenith.
     towards_zenith = SkyCoord(
         alt=coord.altaz.alt+10*u.arcsec,
         az=coord.altaz.az,
         frame=AltAz,
         obstime=obstime,
-        location=location
+        location=location,
+        pressure=coord.pressure,
+        temperature=coord.temperature,
+        relative_humidity=coord.relative_humidity,
+        obswl=coord.obswl
     )
 
     # Note, for maximum precision, can't use coord.position_angle(towards_zenith)
@@ -111,37 +130,19 @@ def position_angle(coord, obstime, location=RUBIN.location):
     # Get point a little closer to NCP
     towards_ncp = SkyCoord(
         ra=coord.icrs.ra,
-        dec=coord.icrs.dec+10*u.arcmin,
+        dec=coord.icrs.dec+10*u.arcsec,
         obstime=obstime,
-        location=location
+        location=location,
+        pressure=coord.pressure,
+        temperature=coord.temperature,
+        relative_humidity=coord.relative_humidity,
+        obswl=coord.obswl
     )
 
-    scalar = np.broadcast(
-        coord.altaz.az.rad,
-        towards_ncp.altaz.az.rad,
-        towards_zenith.altaz.az.rad,
-    ).ndim == 0
-
-    qs = []
-    for caz, calt, naz, nalt, zaz, zalt in zip(*np.broadcast_arrays(
-        np.atleast_1d(coord.altaz.az.rad),
-        np.atleast_1d(coord.altaz.alt.rad),
-        np.atleast_1d(towards_ncp.altaz.az.rad),
-        np.atleast_1d(towards_ncp.altaz.alt.rad),
-        np.atleast_1d(towards_zenith.altaz.az.rad),
-        np.atleast_1d(towards_zenith.altaz.alt.rad),
-    )):
-        cc0 = galsim.CelestialCoord(float(caz)*galsim.radians, float(calt)*galsim.radians)
-        cc1 = galsim.CelestialCoord(float(naz)*galsim.radians, float(nalt)*galsim.radians)
-        cc2 = galsim.CelestialCoord(float(zaz)*galsim.radians, float(zalt)*galsim.radians)
-        qs.append(Angle(cc0.angleBetween(cc1, cc2).deg * u.deg).wrap_at(180*u.deg))
-    if scalar:
-        return qs[0]
-    else:
-        return u.Quantity(qs)
+    return coord.position_angle(towards_zenith) - coord.position_angle(towards_ncp)
 
 
-def rtp_to_rsp(rtp, coord, obstime):
+def rtp_to_rsp(rtp, coord, obstime, location=RUBIN.location):
     """Compute rotSkyPos from rotTelPos
 
     Parameters
@@ -149,20 +150,24 @@ def rtp_to_rsp(rtp, coord, obstime):
     rtp : Angle
         Rotator position in degrees
     coord : SkyCoord
-        ICRF boresight in degrees
+        ICRF boresight in degrees.  Any adjustments due to pressure, temperature,
+        releative humidity, or wavelength should be applied to the coord
+        object.
     obstime : Time
-        time of observation
+        Time of observation
+    location : EarthLocation
+        Location of telescope
 
     Returns
     -------
     rsp : Angle
         rotSkyPos
     """
-    q = position_angle(coord, obstime)
-    return Angle(270*u.deg + rtp - q).wrap_at(180*u.deg)
+    q = position_angle(coord, obstime, location=location)
+    return Angle(270*u.deg + -rtp + q).wrap_at(180*u.deg)
 
 
-def rsp_to_rtp(rsp, coord, obstime):
+def rsp_to_rtp(rsp, coord, obstime, location=RUBIN.location):
     """Compute rotSkyPos from rotTelPos
 
     Parameters
@@ -170,17 +175,21 @@ def rsp_to_rtp(rsp, coord, obstime):
     rsp : Angle
         Rotator position in degrees
     coord : SkyCoord
-        ICRF boresight in degrees
+        ICRF boresight in degrees.  Any adjustments due to pressure, temperature,
+        releative humidity, or wavelength should be applied to the coord
+        object.
     obstime : Time
-        time of observation
+        Time of observation
+    location : EarthLocation
+        Location of telescope
 
     Returns
     -------
     rtp : Angle
         rotTelPos
     """
-    q = position_angle(coord, obstime)
-    return Angle(rsp + q - 270*u.deg).wrap_at(180*u.deg)
+    q = position_angle(coord, obstime, location=location)
+    return Angle(270*u.deg - rsp + q).wrap_at(180*u.deg)
 
 
 class Block:
@@ -312,7 +321,34 @@ class Block:
         return table
 
 
-def schedule_blocks(blocks, start_time):
+def schedule_blocks(
+    blocks,
+    start_time,
+    location=RUBIN.location,
+    pressure=RUBIN.pressure,
+    temperature=RUBIN.temperature,
+    relative_humidity=RUBIN.relative_humidity,
+    obswl=0.7*u.um
+):
+    """
+    Schedule blocks
+
+    Parameters
+    ----------
+    blocks : dict
+        Dictionary of blocks
+    start_time : Time
+        Start time
+    location : EarthLocation
+        Location of telescope
+    obswl : Quantity
+        Wavelength of observation
+
+    Returns
+    -------
+    schedule : QTable
+        Schedule table
+    """
     schedule = QTable(Block.block_schema)
     for block in blocks.values():
         schedule = vstack([schedule, block._table])
@@ -334,8 +370,12 @@ def schedule_blocks(blocks, start_time):
             schedule['alt'][w],
             frame=AltAz(
                 obstime=schedule['obstime'][w],
-                location=RUBIN.location
-            )
+                location=location,
+                pressure=pressure,
+                temperature=temperature,
+                relative_humidity=relative_humidity,
+                obswl=obswl
+            ),
         )
         schedule['ra'][w] = coord.icrs.ra
         schedule['dec'][w] = coord.icrs.dec
@@ -350,7 +390,11 @@ def schedule_blocks(blocks, start_time):
                 schedule['ra'][w],
                 schedule['dec'][w],
                 obstime=schedule['obstime'][w],
-                location=RUBIN.location
+                location=location,
+                pressure=pressure,
+                temperature=temperature,
+                relative_humidity=relative_humidity,
+                obswl=obswl
             ),
             obstime=schedule['obstime'][w]
         )
@@ -378,7 +422,11 @@ def schedule_blocks(blocks, start_time):
             schedule['ra'][w],
             schedule['dec'][w],
             obstime=schedule['obstime'][w],
-            location=RUBIN.location
+            location=location,
+            pressure=pressure,
+            temperature=temperature,
+            relative_humidity=relative_humidity,
+            obswl=obswl
         )
         schedule['alt'][w] = coord.altaz.alt
         schedule['az'][w] = coord.altaz.az
@@ -392,7 +440,11 @@ def schedule_blocks(blocks, start_time):
                 schedule['ra'][w],
                 schedule['dec'][w],
                 obstime=schedule['obstime'][w],
-                location=RUBIN.location
+                location=location,
+                pressure=pressure,
+                temperature=temperature,
+                relative_humidity=relative_humidity,
+                obswl=obswl
             ),
             obstime=schedule['obstime'][w]
         )
@@ -415,14 +467,14 @@ class PeekSky:
         x = -np.sin(np.deg2rad(az))*r
         return x, y
 
-    def peek_sky(self, time, ax=None):
+    def peek_sky(self, time, location=RUBIN.location, ax=None):
         if ax is None:
             fig, ax = plt.subplots(figsize=(6, 5), facecolor='k')
             ax.set_facecolor('k')
         else:
             fig = ax.figure
 
-        frame = AltAz(obstime=time, location=RUBIN.location)
+        frame = AltAz(obstime=time, location=location)
 
         # Draw altaz grid
         az = np.linspace(0, 2*np.pi, 100)
@@ -452,7 +504,7 @@ class PeekSky:
 
         # Draw sun
         sunCoords = get_body('sun', time)
-        sunCoords.location = RUBIN.location
+        sunCoords.location = location
         if sunCoords.altaz.alt.value > 0:
             ax.text(
                 *self.azalt_to_postel(
@@ -466,7 +518,7 @@ class PeekSky:
 
         # Draw moon
         moonCoords = get_body('moon', time)
-        moonCoords.location = RUBIN.location
+        moonCoords.location = location
 
         if moonCoords.altaz.alt.value > 0:
             ax.text(
@@ -481,7 +533,7 @@ class PeekSky:
 
         # Draw Jupiter and Venus
         jupiterCoords = get_body('jupiter', time)
-        jupiterCoords.location = RUBIN.location
+        jupiterCoords.location = location
         if jupiterCoords.altaz.alt.value > 0:
             ax.text(
                 *self.azalt_to_postel(
@@ -494,7 +546,7 @@ class PeekSky:
             )
 
         venusCoords = get_body('venus', time)
-        venusCoords.location = RUBIN.location
+        venusCoords.location = location
         if venusCoords.altaz.alt.value > 0:
             ax.text(
                 *self.azalt_to_postel(
