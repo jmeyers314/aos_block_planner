@@ -43,12 +43,27 @@ def almanac(day, verbose=False):
         'sunrise': {},
     }
     for alt in [0, -6, -12, -18]:
-        out['sunset'][alt] = RUBIN.sun_set_time(noon_cp, horizon=alt*u.deg, which='next')
+        out['sunset'][alt] = RUBIN.sun_set_time(
+            noon_cp,
+            horizon=alt*u.deg,
+            which='next'
+        )
     for alt in [0, -6, -12, -18]:
-        out['sunrise'][alt] = RUBIN.sun_rise_time(noon_cp, horizon=alt*u.deg, which='next')
-    out['moonrise'] = RUBIN.moon_rise_time(noon_cp, horizon=0*u.deg, which='next')
-    out['moonset'] = RUBIN.moon_set_time(noon_cp, horizon=0*u.deg, which='next')
-
+        out['sunrise'][alt] = RUBIN.sun_rise_time(
+            noon_cp,
+            horizon=alt*u.deg,
+            which='next'
+        )
+    out['moonrise'] = RUBIN.moon_rise_time(
+        noon_cp,
+        horizon=0*u.deg,
+        which='next'
+    )
+    out['moonset'] = RUBIN.moon_set_time(
+        noon_cp,
+        horizon=0*u.deg,
+        which='next'
+    )
 
     if verbose:
         print("   alt      America/Santiago                     UTC                      PT")
@@ -82,7 +97,7 @@ def almanac(day, verbose=False):
 
 
 def position_angle(coord, obstime, location=RUBIN.location):
-    """Compute rotator offset aligning camera +Y_CCS with ICRF south
+    """Compute rotator offset aligning camera +Y_CCS with ICRF north
 
     Parameters
     ----------
@@ -120,12 +135,13 @@ def position_angle(coord, obstime, location=RUBIN.location):
         obswl=coord.obswl
     )
 
-    # Note, for maximum precision, can't use coord.position_angle(towards_zenith)
-    # since that computes the angle projected onto the celestial sphere, and we
-    # want the angle projected onto AltAz.  AltAz isn't a simple spherical rotation,
-    # there are stretches and skews too so milliarcsecond errors exist if computing
-    # the angle on the ICRS sphere.  Instead, we use GalSim spherical trig and
-    # compute on the AltAz sphere.
+    # Note, for maximum precision, can't use
+    # coord.position_angle(towards_zenith) since that computes the angle
+    # projected onto the celestial sphere, and we want the angle projected onto
+    # AltAz.  AltAz isn't a simple spherical rotation, there are stretches and
+    # skews too so milliarcsecond errors exist if computing the angle on the
+    # ICRS sphere.  Instead, we use GalSim spherical trig and compute on the
+    # AltAz sphere.
 
     # Get point a little closer to NCP
     towards_ncp = SkyCoord(
@@ -139,7 +155,10 @@ def position_angle(coord, obstime, location=RUBIN.location):
         obswl=coord.obswl
     )
 
-    return coord.position_angle(towards_zenith) - coord.position_angle(towards_ncp)
+    return (
+        coord.position_angle(towards_zenith)
+        - coord.position_angle(towards_ncp)
+    )
 
 
 def rtp_to_rsp(rtp, coord, obstime, location=RUBIN.location):
@@ -150,9 +169,9 @@ def rtp_to_rsp(rtp, coord, obstime, location=RUBIN.location):
     rtp : Angle
         Rotator position in degrees
     coord : SkyCoord
-        ICRF boresight in degrees.  Any adjustments due to pressure, temperature,
-        releative humidity, or wavelength should be applied to the coord
-        object.
+        ICRF boresight in degrees.  Any adjustments due to pressure,
+        temperature, relative humidity, or wavelength should be applied to the
+        coord object.
     obstime : Time
         Time of observation
     location : EarthLocation
@@ -175,9 +194,9 @@ def rsp_to_rtp(rsp, coord, obstime, location=RUBIN.location):
     rsp : Angle
         Rotator position in degrees
     coord : SkyCoord
-        ICRF boresight in degrees.  Any adjustments due to pressure, temperature,
-        releative humidity, or wavelength should be applied to the coord
-        object.
+        ICRF boresight in degrees.  Any adjustments due to pressure,
+        temperature, relative humidity, or wavelength should be applied to the
+        coord object.
     obstime : Time
         Time of observation
     location : EarthLocation
@@ -399,7 +418,8 @@ def schedule_blocks(
             obstime=schedule['obstime'][w]
         )
 
-    # Where ra/dec/rsp are still missing, assume it's the same as previous (i.e., tracking)
+    # Where ra/dec/rsp are still missing, assume it's the same as previous
+    # (i.e., we're tracking)
     prev_ra = None
     prev_dec = None
     prev_rsp = None
@@ -458,7 +478,9 @@ class PeekSky:
         n_points = len(self.gaia)
         self.n_side = int(np.sqrt(n_points / 12))
         self.indices = np.arange(hp.nside2npix(self.n_side))
-        self.gaia_ra, self.gaia_dec = hp.pix2ang(self.n_side, self.indices, lonlat=True)
+        self.gaia_ra, self.gaia_dec = hp.pix2ang(
+            self.n_side, self.indices, lonlat=True
+        )
 
     @staticmethod
     def azalt_to_postel(az, alt):
@@ -559,15 +581,24 @@ class PeekSky:
             )
 
         # Cardinal directions
-        ax.text(*self.azalt_to_postel(0, -5), "N", c='r', fontsize=15, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(90, -5), "E", c='r', fontsize=15, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(180, -5), "S", c='r', fontsize=15, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(270, -5), "W", c='r', fontsize=15, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(45, -7), "45", c='g', fontsize=10, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(135, -7), "135", c='g', fontsize=10, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(225, -7), "225", c='g', fontsize=10, verticalalignment='center', horizontalalignment='center')
-        ax.text(*self.azalt_to_postel(315, -7), "315", c='g', fontsize=10, verticalalignment='center', horizontalalignment='center')
-
+        for az, alt, label, color in [
+            (0, 0, "N", 'r'),
+            (90, 0, "E", 'r'),
+            (180, 0, "S", 'r'),
+            (270, 0, "W", 'r'),
+            (45, 0, "45", 'g'),
+            (135, 0, "135", 'g'),
+            (225, 0, "225", 'g'),
+            (315, 0, "315", 'g')
+        ]:
+            ax.text(
+                *self.azalt_to_postel(az, alt),
+                label,
+                c=color,
+                fontsize=15,
+                verticalalignment='center',
+                horizontalalignment='center'
+            )
         ax.set_xlim(-100, 100)
         ax.set_ylim(-100, 100)
 
