@@ -96,8 +96,13 @@ def almanac(day, verbose=False):
     return out
 
 
-def position_angle(coord, obstime, location=RUBIN.location):
-    """Compute rotator offset aligning camera +Y_CCS with ICRF north
+def pseudo_parallactic_angle(coord, obstime, location=RUBIN.location):
+    """Compute the pseudo parallactic angle.
+
+    The (traditional) parallactic angle is the angle zenith - coord - NCP
+    where NCP is the true-of-date north celestial pole.  This function instead
+    computes zenith - coord - NCP_ICRF where NCP_ICRF is the north celestial
+    pole in the International Celestial Reference Frame.
 
     Parameters
     ----------
@@ -120,12 +125,21 @@ def position_angle(coord, obstime, location=RUBIN.location):
         coord.location=location
     except AttributeError:
         pass
+    assert np.all(coord.obstime == obstime)
+    assert np.all(coord.location == location)
 
     # Get point a little closer to zenith
-    # This will fail if coord is too close to zenith.
+    small_angle = 10*u.arcsec
+    zalt = coord.altaz.alt + small_angle
+    zaz = coord.altaz.az
+    zdist = 90*u.deg - coord.altaz.alt
+    if np.any(w := zdist < small_angle):
+        # Overshoot zenith by small_angle
+        zalt[w] = small_angle - zdist[w]
+        zaz[w] = coord.altaz.az[w] + np.pi*u.rad
     towards_zenith = SkyCoord(
-        alt=coord.altaz.alt+10*u.arcsec,
-        az=coord.altaz.az,
+        alt=zalt,
+        az=zaz,
         frame=AltAz,
         obstime=obstime,
         location=location,
@@ -135,18 +149,17 @@ def position_angle(coord, obstime, location=RUBIN.location):
         obswl=coord.obswl
     )
 
-    # Note, for maximum precision, can't use
-    # coord.position_angle(towards_zenith) since that computes the angle
-    # projected onto the celestial sphere, and we want the angle projected onto
-    # AltAz.  AltAz isn't a simple spherical rotation, there are stretches and
-    # skews too so milliarcsecond errors exist if computing the angle on the
-    # ICRS sphere.  Instead, we use GalSim spherical trig and compute on the
-    # AltAz sphere.
-
     # Get point a little closer to NCP
+    ndec = coord.icrs.dec + small_angle
+    nra = coord.icrs.ra
+    ndist = 90*u.deg - coord.icrs.dec
+    if np.any(w:= ndist < small_angle):
+        # Overshoot NCP by small_angle
+        ndec[w] = small_angle - ndist[w]
+        nra[w] = coord.icrs.ra[w] + np.pi*u.rad
     towards_ncp = SkyCoord(
-        ra=coord.icrs.ra,
-        dec=coord.icrs.dec+10*u.arcsec,
+        ra=nra,
+        dec=ndec,
         obstime=obstime,
         location=location,
         pressure=coord.pressure,
@@ -182,8 +195,8 @@ def rtp_to_rsp(rtp, coord, obstime, location=RUBIN.location):
     rsp : Angle
         rotSkyPos
     """
-    q = position_angle(coord, obstime, location=location)
-    return Angle(270*u.deg + -rtp + q).wrap_at(180*u.deg)
+    q = pseudo_parallactic_angle(coord, obstime, location=location)
+    return Angle(270*u.deg - rtp + q).wrap_at(180*u.deg)
 
 
 def rsp_to_rtp(rsp, coord, obstime, location=RUBIN.location):
@@ -207,7 +220,7 @@ def rsp_to_rtp(rsp, coord, obstime, location=RUBIN.location):
     rtp : Angle
         rotTelPos
     """
-    q = position_angle(coord, obstime, location=location)
+    q = pseudo_parallactic_angle(coord, obstime, location=location)
     return Angle(270*u.deg - rsp + q).wrap_at(180*u.deg)
 
 
@@ -379,7 +392,7 @@ def schedule_blocks(
 
     # First fill in obstime
     schedule['obstime'] = start_time + np.cumsum(schedule['elaptime'])
-    schedule['obstime'].format='iso'
+    schedule['obstime'].format='isot'
 
     # Where ra/dec are missing, compute from alt/az
     w = schedule['ra'].mask & ~schedule['alt'].mask
@@ -398,6 +411,18 @@ def schedule_blocks(
         )
         schedule['ra'][w] = coord.icrs.ra
         schedule['dec'][w] = coord.icrs.dec
+
+    # Where ra/dec/rsp are still missing, assume it's the same as previous
+    # (i.e., we're tracking)
+    prev_ra = None
+    prev_dec = None
+    for row in schedule:
+        if not row['ra'].mask:
+            prev_ra = row['ra']
+            prev_dec = row['dec']
+        else:
+            row['ra'] = prev_ra
+            row['dec'] = prev_dec
 
     # Where rsp is missing, compute from rtp
     w = schedule['rsp'].mask & ~schedule['rtp'].mask
@@ -418,18 +443,10 @@ def schedule_blocks(
             obstime=schedule['obstime'][w]
         )
 
-    # Where ra/dec/rsp are still missing, assume it's the same as previous
+    # Where rsp is still missing, assume it's the same as previous
     # (i.e., we're tracking)
-    prev_ra = None
-    prev_dec = None
     prev_rsp = None
     for row in schedule:
-        if not row['ra'].mask:
-            prev_ra = row['ra']
-            prev_dec = row['dec']
-        else:
-            row['ra'] = prev_ra
-            row['dec'] = prev_dec
         if not row['rsp'].mask:
             prev_rsp = row['rsp']
         else:
@@ -469,6 +486,23 @@ def schedule_blocks(
             obstime=schedule['obstime'][w]
         )
 
+    # Finally, add hour angle, pseudo-parallactic angle
+    coord = SkyCoord(
+        schedule['ra'], schedule['dec'],
+        obstime=schedule['obstime'],
+        location=location,
+        pressure=pressure,
+        temperature=temperature,
+        relative_humidity=relative_humidity,
+        obswl=obswl
+    )
+    schedule['ha'] = coord.hadec.ha
+
+    schedule['q'] = pseudo_parallactic_angle(
+        coord,
+        obstime=schedule['obstime'],
+        location=location
+    ).to(u.deg)
     return schedule
 
 
