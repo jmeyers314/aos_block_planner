@@ -180,11 +180,10 @@ def rtp_to_rsp(rtp, coord, obstime, location=RUBIN.location):
     Parameters
     ----------
     rtp : Angle
-        Rotator position in degrees
+        Rotator position
     coord : SkyCoord
-        ICRF boresight in degrees.  Any adjustments due to pressure,
-        temperature, relative humidity, or wavelength should be applied to the
-        coord object.
+        ICRF boresight.  Any adjustments due to pressure, temperature, relative
+        humidity, or wavelength should be applied to the coord object.
     obstime : Time
         Time of observation
     location : EarthLocation
@@ -205,11 +204,10 @@ def rsp_to_rtp(rsp, coord, obstime, location=RUBIN.location):
     Parameters
     ----------
     rsp : Angle
-        Rotator position in degrees
+        Rotator position
     coord : SkyCoord
-        ICRF boresight in degrees.  Any adjustments due to pressure,
-        temperature, relative humidity, or wavelength should be applied to the
-        coord object.
+        ICRF boresight.  Any adjustments due to pressure, temperature, relative
+        humidity, or wavelength should be applied to the coord object.
     obstime : Time
         Time of observation
     location : EarthLocation
