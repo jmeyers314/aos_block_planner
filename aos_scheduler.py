@@ -42,16 +42,16 @@ def almanac(day, verbose=False):
         'sunset': {},
         'sunrise': {},
     }
-    for alt in [0, -6, -12, -18]:
-        out['sunset'][alt] = RUBIN.sun_set_time(
+    for el in [0, -6, -12, -18]:
+        out['sunset'][el] = RUBIN.sun_set_time(
             noon_cp,
-            horizon=alt*u.deg,
+            horizon=el*u.deg,
             which='next'
         )
-    for alt in [0, -6, -12, -18]:
-        out['sunrise'][alt] = RUBIN.sun_rise_time(
+    for el in [-18, -12, -6, 0]:
+        out['sunrise'][el] = RUBIN.sun_rise_time(
             noon_cp,
-            horizon=alt*u.deg,
+            horizon=el*u.deg,
             which='next'
         )
     out['moonrise'] = RUBIN.moon_rise_time(
@@ -66,21 +66,21 @@ def almanac(day, verbose=False):
     )
 
     if verbose:
-        print("   alt      America/Santiago                     UTC                      PT")
+        print("    el      America/Santiago                     UTC                      PT")
         print()
         print("sunset")
-        for alt, time in out['sunset'].items():
+        for el, time in out['sunset'].items():
             time_utc = time.to_datetime(timezone=pytz.utc)
             time_cp = time_utc.astimezone(cptz)
             time_pt = time_utc.astimezone(pttz)
-            print(f"   {alt:3d}   {time_cp.strftime('%Y-%m-%d %H:%M:%S')}     {time_utc.strftime('%Y-%m-%d %H:%M:%S')}     {time_pt.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   {el:3d}   {time_cp.strftime('%Y-%m-%d %H:%M:%S')}     {time_utc.strftime('%Y-%m-%d %H:%M:%S')}     {time_pt.strftime('%Y-%m-%d %H:%M:%S')}")
         print()
         print("sunrise")
-        for alt, time in out['sunrise'].items():
+        for el, time in out['sunrise'].items():
             time_utc = time.to_datetime(timezone=pytz.utc)
             time_cp = time_utc.astimezone(cptz)
             time_pt = time_utc.astimezone(pttz)
-            print(f"   {alt:3d}   {time_cp.strftime('%Y-%m-%d %H:%M:%S')}     {time_utc.strftime('%Y-%m-%d %H:%M:%S')}     {time_pt.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   {el:3d}   {time_cp.strftime('%Y-%m-%d %H:%M:%S')}     {time_utc.strftime('%Y-%m-%d %H:%M:%S')}     {time_pt.strftime('%Y-%m-%d %H:%M:%S')}")
         print()
         print("moonrise")
         time_utc = out['moonrise'].to_datetime(timezone=pytz.utc)
@@ -384,7 +384,7 @@ def schedule_blocks(
         schedule = vstack([schedule, block._table])
     n = len(schedule)
 
-    for name in ['ra', 'dec', 'rsp', 'rtp', 'alt', 'az']:
+    for name in ['ra', 'dec', 'rsp', 'rtp', 'el', 'az']:
         if name not in schedule.colnames:
             schedule[name] = Masked(np.full(n, np.nan)*u.deg, mask=True)
 
@@ -392,12 +392,12 @@ def schedule_blocks(
     schedule['obstime'] = start_time + np.cumsum(schedule['elaptime'])
     schedule['obstime'].format='isot'
 
-    # Where ra/dec are missing, compute from alt/az
-    w = schedule['ra'].mask & ~schedule['alt'].mask
+    # Where ra/dec are missing, compute from az/el
+    w = schedule['ra'].mask & ~schedule['el'].mask
     if np.any(w):
         coord = SkyCoord(
             schedule['az'][w],
-            schedule['alt'][w],
+            schedule['el'][w],
             frame=AltAz(
                 obstime=schedule['obstime'][w],
                 location=location,
@@ -450,8 +450,8 @@ def schedule_blocks(
         else:
             row['rsp'] = prev_rsp
 
-    # We should now be able to go back and fill in missing alt/az/rtp
-    w = schedule['alt'].mask & ~schedule['ra'].mask
+    # We should now be able to go back and fill in missing az/el/rtp
+    w = schedule['el'].mask & ~schedule['ra'].mask
     if np.any(w):
         coord = SkyCoord(
             schedule['ra'][w],
@@ -463,7 +463,7 @@ def schedule_blocks(
             relative_humidity=relative_humidity,
             obswl=obswl
         )
-        schedule['alt'][w] = coord.altaz.alt
+        schedule['el'][w] = coord.altaz.alt
         schedule['az'][w] = coord.altaz.az
 
     w = schedule['rtp'].mask & ~schedule['rsp'].mask
@@ -515,8 +515,8 @@ class PeekSky:
         )
 
     @staticmethod
-    def azalt_to_postel(az, alt):
-        r = 90-alt
+    def azel_to_postel(az, el):
+        r = 90-el
         y = np.cos(np.deg2rad(az))*r
         x = -np.sin(np.deg2rad(az))*r
         return x, y
@@ -530,7 +530,7 @@ class PeekSky:
 
         frame = AltAz(obstime=time, location=location)
 
-        # Draw altaz grid
+        # Draw azel grid
         az = np.linspace(0, 2*np.pi, 100)
         for zen in np.arange(0, 90, 15):
             y, x = zen*np.cos(az), -zen*np.sin(az)
@@ -576,7 +576,7 @@ class PeekSky:
 
         if moonCoords.altaz.alt.value > 0:
             ax.text(
-                *self.azalt_to_postel(
+                *self.azel_to_postel(
                     moonCoords.altaz.az.deg,
                     moonCoords.altaz.alt.deg
                 ),
@@ -590,7 +590,7 @@ class PeekSky:
         jupiterCoords.location = location
         if jupiterCoords.altaz.alt.value > 0:
             ax.text(
-                *self.azalt_to_postel(
+                *self.azel_to_postel(
                     jupiterCoords.altaz.az.deg,
                     jupiterCoords.altaz.alt.deg
                 ),
@@ -603,7 +603,7 @@ class PeekSky:
         venusCoords.location = location
         if venusCoords.altaz.alt.value > 0:
             ax.text(
-                *self.azalt_to_postel(
+                *self.azel_to_postel(
                     venusCoords.altaz.az.deg,
                     venusCoords.altaz.alt.deg
                 ),
@@ -613,7 +613,7 @@ class PeekSky:
             )
 
         # Cardinal directions
-        for az, alt, label, color in [
+        for az, el, label, color in [
             (0, 0, "N", 'r'),
             (90, 0, "E", 'r'),
             (180, 0, "S", 'r'),
@@ -624,7 +624,7 @@ class PeekSky:
             (315, 0, "315", 'g')
         ]:
             ax.text(
-                *self.azalt_to_postel(az, alt),
+                *self.azel_to_postel(az, el),
                 label,
                 c=color,
                 fontsize=15,
@@ -636,10 +636,10 @@ class PeekSky:
 
         xs = np.linspace(-100, 100, 700)
         xs, ys = np.meshgrid(xs, xs)
-        alt = np.deg2rad(90 - np.hypot(xs, ys))
-        w = alt >= 0
+        el = np.deg2rad(90 - np.hypot(xs, ys))
+        w = el >= 0
         az = np.arctan2(-xs, ys)
-        coords = SkyCoord(az*u.rad, alt*u.rad, frame=frame)
+        coords = SkyCoord(az*u.rad, el*u.rad, frame=frame)
         ra = coords.icrs.ra.deg
         dec = coords.icrs.dec.deg
         idxs = hp.ang2pix(self.n_side, ra, dec, lonlat=True)
@@ -650,12 +650,12 @@ class PeekSky:
         ax.imshow(density, extent=[-100, 100, -100, 100], origin='lower')
 
         def xystr(x, y):
-            alt = 90 - np.hypot(x,y)
             az = np.rad2deg(np.arctan2(-x, y))%360
-            c = SkyCoord(az*u.deg, alt*u.deg, frame=frame)
+            el = 90 - np.hypot(x,y)
+            c = SkyCoord(az*u.deg, el*u.deg, frame=frame)
             α = c.icrs.ra.deg
             δ = c.icrs.dec.deg
-            return f"{alt=:.1f} {az=:.1f} {α=:.1f} {δ=:.1f}"
+            return f"{az=:.1f} {el=:.1f} {α=:.1f} {δ=:.1f}"
 
         def hover(event):
             if event.inaxes == ax:
