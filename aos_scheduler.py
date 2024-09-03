@@ -55,12 +55,32 @@ def almanac(day, verbose=False):
             which='next'
         )
     out['moonrise'] = RUBIN.moon_rise_time(
-        noon_cp,
+        out['sunrise'][0],
+        horizon=0*u.deg,
+        which='previous'
+    )
+    out['moonset'] = RUBIN.moon_set_time(
+        out['moonrise'],
         horizon=0*u.deg,
         which='next'
     )
-    out['moonset'] = RUBIN.moon_set_time(
-        noon_cp,
+    out['prev_moonset'] = RUBIN.moon_set_time(
+        out['moonrise'],
+        horizon=0*u.deg,
+        which='previous'
+    )
+    out['prev_moonrise'] = RUBIN.moon_rise_time(
+        out['prev_moonset'],
+        horizon=0*u.deg,
+        which='previous'
+    )
+    out['next_moonrise'] = RUBIN.moon_rise_time(
+        out['moonset'],
+        horizon=0*u.deg,
+        which='next'
+    )
+    out['next_moonset'] = RUBIN.moon_set_time(
+        out['next_moonrise'],
         horizon=0*u.deg,
         which='next'
     )
@@ -93,6 +113,9 @@ def almanac(day, verbose=False):
         time_cp = time_utc.astimezone(cptz)
         time_pt = time_utc.astimezone(pttz)
         print(f"   {0:3d}   {time_cp.strftime('%Y-%m-%d %H:%M:%S')}     {time_utc.strftime('%Y-%m-%d %H:%M:%S')}     {time_pt.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        print()
+        print(f"Total dark time: {(out['sunrise'][-12]-out['sunset'][-12]).to(u.h):.2f} hours")
     return out
 
 
@@ -501,6 +524,29 @@ def schedule_blocks(
         obstime=schedule['obstime'],
         location=location
     ).to(u.deg)
+
+    # Add a few columns
+    schedule['dayobs'] = [int(o.datetime.strftime('%Y%m%d')) for o in schedule['obstime']-12*u.h]
+    schedule['seqnum'] = np.empty(len(schedule), dtype=int)
+    schedule['nightfrac'] = np.zeros(len(schedule))
+    for d in np.unique(schedule['dayobs']):
+        w = schedule['dayobs'] == d
+        schedule['seqnum'][w] = np.arange(1, np.sum(w)+1)
+        dstr = str(d)
+        dstr = f"{dstr[:4]}-{dstr[4:6]}-{dstr[6:]}"
+        night = almanac(dstr)
+        t0 = night['sunset'][-12]
+        t1 = night['sunrise'][-12]
+        schedule['nightfrac'][w] = (schedule['obstime'][w]-t0)/(t1-t0)
+    schedule['mjd'] = schedule['obstime'].tai.mjd
+
+    # Reorder columns
+    cols = schedule.colnames
+    new_cols = ['dayobs', 'seqnum', 'nightfrac', 'block_name', 'band', 'mjd', 'ra', 'dec', 'rsp', 'az', 'el', 'rtp', 'ha', 'q']
+    for col in cols:
+        if col not in new_cols:
+            new_cols.append(col)
+    schedule = schedule[new_cols]
     return schedule
 
 
@@ -561,7 +607,7 @@ class PeekSky:
         sunCoords.location = location
         if sunCoords.altaz.alt.value > 0:
             ax.text(
-                *self.azalt_to_postel(
+                *self.azel_to_postel(
                     sunCoords.altaz.az.deg,
                     sunCoords.altaz.alt.deg
                 ),
@@ -665,3 +711,152 @@ class PeekSky:
         fig.tight_layout()
 
         return fig, ax
+
+
+def focus_sweep(
+    az=None,
+    el=None,
+    rtp=None,
+    axis=None,
+    window=None,
+    nstep=9,
+    name=None
+):
+    if any(x is not None for x in [az, el, rtp]):
+        if not all(x is not None for x in [az, el, rtp]):
+            raise ValueError("If any of az, el, rtp are set, all must be set")
+        mask = [False]+[True]*(nstep-1)
+    else:
+        az = np.nan*u.deg
+        el = np.nan*u.deg
+        rtp = np.nan*u.deg
+        mask = [True]*nstep
+
+    az = Masked(np.full(nstep, az.value)*az.unit, mask=mask)
+    el = Masked(np.full(nstep, el.value)*el.unit, mask=mask)
+    rtp = Masked(np.full(nstep, rtp.value)*rtp.unit, mask=mask)
+
+    if"_d" in axis:
+        if "_shift" not in axis:
+            axis = axis.replace("_d", "_shift_d")
+    if "_r" in axis:
+        if "_rot" not in axis:
+            axis = axis.replace("_r", "_rot_r")
+
+    if window is None:
+        match axis:
+            case 'cam_shift_dz' | 'm2_shift_dz':
+                window = 300*u.micron
+            case 'cam_shift_dx' | 'cam_shift_dy':
+                window = 14000*u.micron
+            case 'cam_rot_rx' | 'cam_rot_ry':
+                window = 900*u.arcsec
+            case 'm2_shift_dx' | 'm2_shift_dy':
+                window = 7000*u.micron
+            case 'm2_rot_rx' | 'm2_rot_ry':
+                window = 240*u.arcsec
+            case _:
+                raise ValueError(f"Unknown axis {axis}")
+    vals = np.linspace(-window/2, window/2, nstep)
+    if name is None:
+        name = f"sweep_{axis}".replace("_shift", "").replace("_rot", "")
+    block = Block(
+        az=az,
+        el=el,
+        rtp=rtp,
+        **{axis: vals},
+        n=nstep,
+        name=name
+    )
+    return block
+
+
+def sensitivity(
+    az,
+    el,
+    axis=None,
+    window=None,
+    ntriplet=9,
+    name=None
+):
+    mask = np.tile([False, True, True], ntriplet)  # Ratchet back every 3rd exposure, track in between.
+    # Rotate from -85 to 85 degrees in rtp.
+    rtp = np.full(3*ntriplet, np.nan)*u.deg
+    rtp[::3] = np.linspace(-85, 85, ntriplet)*u.deg
+    rtp = Masked(rtp, mask=mask)
+    az = Masked(np.tile([az.value, np.nan, np.nan], ntriplet)*az.unit, mask=mask)
+    el = Masked(np.tile([el.value, np.nan, np.nan], ntriplet)*el.unit, mask=mask)
+
+    if"_d" in axis:
+        if "_shift" not in axis:
+            axis = axis.replace("_d", "_shift_d")
+    if "_r" in axis:
+        if "_rot" not in axis:
+            axis = axis.replace("_r", "_rot_r")
+
+    if window is None:
+        if (match := re.match(r"^(cam|m2)_shift_dz$", axis)):
+            window = 300*u.micron
+        elif (match := re.match(r"^(cam|m2)_shift_(dx|dy)$", axis)):
+            if match.group(1) == "cam":
+                window = 14000*u.micron
+            else:
+                window = 7000*u.micron
+        elif (match := re.match(r"^(cam|m2)_rot_(rx|ry)$", axis)):
+            if match.group(1) == "cam":
+                window = 900*u.arcsec
+            else:
+                window = 240*u.arcsec
+        elif (match := re.match(r"^m1m3_b(\d+)$", axis)):
+            window = 2*u.micron
+        elif (match := re.match(r"^m2_b(\d+)$", axis)):
+            window = 1*u.micron
+        else:
+            raise ValueError(f"Unknown axis {axis}")
+    focusZ = np.tile([-1.5, 1.5, 0.0]*u.mm, ntriplet)  # intra/extra/focal
+    vals = np.repeat(np.linspace(-window/2, window/2, ntriplet), 3)
+    if name is None:
+        name = f"sens_{axis}".replace("_shift", "").replace("_rot", "")
+    block = Block(
+        az=az,
+        el=el,
+        rtp=rtp,
+        focusZ=focusZ,
+        **{axis: vals},
+        n=3*ntriplet,
+        name=name
+    )
+    return block
+
+
+def reference(
+    az=None,
+    el=None,
+    rtp=None,
+    focusZ=0*u.mm,
+    n=10,
+    name="reference"
+):
+    if any(x is not None for x in [az, el, rtp]):
+        if not all(x is not None for x in [az, el, rtp]):
+            raise ValueError("If any of az, el, rtp are set, all must be set")
+        mask = [False]+[True]*(n-1)
+    else:
+        az = np.nan*u.deg
+        el = np.nan*u.deg
+        rtp = np.nan*u.deg
+        mask = [True]*n
+
+    az = Masked(np.full(n, az.value)*az.unit, mask=mask)
+    el = Masked(np.full(n, el.value)*el.unit, mask=mask)
+    rtp = Masked(np.full(n, rtp.value)*rtp.unit, mask=mask)
+
+    block = Block(
+        az=az,
+        el=el,
+        rtp=rtp,
+        focusZ=focusZ,
+        n=n,
+        name=name
+    )
+    return block
